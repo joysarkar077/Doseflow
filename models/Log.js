@@ -21,7 +21,7 @@ const LogSchema = new mongoose.Schema({
     enum: [
       'reminder_due', 'snoozed', 'lid_opened', 'lid_closed', 
       'user_confirmed', 'missed', 'unscheduled_access', 
-      'sensor_disagreement', 'lid_left_open_warning'
+      'sensor_disagreement', 'lid_left_open_warning', 'settings_updated'
     ],
     required: true
   },

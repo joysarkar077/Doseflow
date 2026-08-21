@@ -107,13 +107,21 @@
       </div>
 
       <div class="glass-card mt-2">
-        <h3>Snooze Settings</h3>
+        <h3>Device Configuration</h3>
         <form id="snooze-form">
           <div class="form-group">
-            <label for="snooze-timer">Snooze Duration (Minutes)</label>
-            <input type="number" id="snooze-timer" min="1" max="60" required>
+            <label>Snooze Timer (minutes)</label>
+            <input type="number" id="snoozeTimerMinutes" min="1" max="60" required>
           </div>
-          <button type="submit" class="btn btn-primary">Save Snooze</button>
+          <div class="form-group">
+            <label>Schedule Window Time (minutes)</label>
+            <input type="number" id="scheduleWindowMinutes" min="1" max="120" required>
+          </div>
+          <div class="form-group">
+            <label>Lid Opened Warning Timer (minutes)</label>
+            <input type="number" id="lidWarningMinutes" min="1" max="120" required>
+          </div>
+          <button type="submit" class="btn btn-primary" style="width: 100%;">Save Settings</button>
         </form>
       </div>
     </section>

@@ -18,6 +18,14 @@ const DeviceSchema = new mongoose.Schema({
     type: Number,
     default: 10
   },
+  scheduleWindowMinutes: {
+    type: Number,
+    default: 30
+  },
+  lidWarningMinutes: {
+    type: Number,
+    default: 35
+  },
   status: {
     online: Boolean,
     lastSeenAt: Date,

@@ -70,6 +70,10 @@ const renderLogs = (logs) => {
         label = 'Lid Left Open';
         badgeClass = 'badge-warning';
         break;
+      case 'settings_updated':
+        label = 'Settings Updated';
+        badgeClass = 'badge-info';
+        break;
     }
     
     // Details string

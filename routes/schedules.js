@@ -103,7 +103,7 @@ router.delete('/:id', authUser, async (req, res) => {
       return res.status(400).json({ message: 'Cannot delete default schedules' });
     }
 
-    await Schedule.findByIdAndRemove(req.params.id);
+    await Schedule.findByIdAndDelete(req.params.id);
     res.json({ message: 'Schedule removed' });
   } catch (err) {
     console.error(err.message);

@@ -5,6 +5,7 @@ const bcrypt = require('bcryptjs');
 const authUser = require('../middleware/authUser');
 const Device = require('../models/Device');
 const User = require('../models/User');
+const Log = require('../models/Log');
 
 const algorithm = 'aes-256-cbc';
 
@@ -60,12 +61,16 @@ router.put('/wifi', authUser, async (req, res) => {
 });
 
 // @route   GET api/device/snooze
-// @desc    Get snooze timer
+// @desc    Get snooze timer and other settings
 // @access  Private
 router.get('/snooze', authUser, async (req, res) => {
   try {
     const device = await Device.findById(req.user.deviceId);
-    res.json({ snoozeTimerMinutes: device.snoozeTimerMinutes });
+    res.json({ 
+      snoozeTimerMinutes: device.snoozeTimerMinutes,
+      scheduleWindowMinutes: device.scheduleWindowMinutes,
+      lidWarningMinutes: device.lidWarningMinutes
+    });
   } catch (err) {
     console.error(err.message);
     res.status(500).send('Server Error');
@@ -73,14 +78,31 @@ router.get('/snooze', authUser, async (req, res) => {
 });
 
 // @route   PUT api/device/snooze
-// @desc    Update snooze timer
+// @desc    Update snooze timer and other settings
 // @access  Private
 router.put('/snooze', authUser, async (req, res) => {
   try {
     const device = await Device.findById(req.user.deviceId);
-    device.snoozeTimerMinutes = req.body.snoozeTimerMinutes;
+    if (req.body.snoozeTimerMinutes) device.snoozeTimerMinutes = req.body.snoozeTimerMinutes;
+    if (req.body.scheduleWindowMinutes) device.scheduleWindowMinutes = req.body.scheduleWindowMinutes;
+    if (req.body.lidWarningMinutes) device.lidWarningMinutes = req.body.lidWarningMinutes;
+    
     await device.save();
-    res.json({ snoozeTimerMinutes: device.snoozeTimerMinutes });
+
+    const newLog = new Log({
+      deviceId: device._id,
+      eventType: 'settings_updated',
+      timestamp: new Date(),
+      sequenceId: Date.now(),
+      note: `Settings updated via dashboard`
+    });
+    await newLog.save();
+
+    res.json({ 
+      snoozeTimerMinutes: device.snoozeTimerMinutes,
+      scheduleWindowMinutes: device.scheduleWindowMinutes,
+      lidWarningMinutes: device.lidWarningMinutes
+    });
   } catch (err) {
     console.error(err.message);
     res.status(500).send('Server Error');

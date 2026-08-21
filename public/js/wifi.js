@@ -8,7 +8,9 @@ window.loadWifiSettings = async () => {
     
     const snoozeData = await window.apiFetch('/device/snooze');
     if (snoozeData) {
-      document.getElementById('snooze-timer').value = snoozeData.snoozeTimerMinutes || 10;
+      document.getElementById('snoozeTimerMinutes').value = snoozeData.snoozeTimerMinutes || 10;
+      document.getElementById('scheduleWindowMinutes').value = snoozeData.scheduleWindowMinutes || 30;
+      document.getElementById('lidWarningMinutes').value = snoozeData.lidWarningMinutes || 35;
     }
   } catch (error) {
     console.error(error);
@@ -32,13 +34,19 @@ document.getElementById('wifi-form')?.addEventListener('submit', async (e) => {
 
 document.getElementById('snooze-form')?.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const snoozeTimerMinutes = document.getElementById('snooze-timer').value;
+  const snoozeTimerMinutes = document.getElementById('snoozeTimerMinutes').value;
+  const scheduleWindowMinutes = document.getElementById('scheduleWindowMinutes').value;
+  const lidWarningMinutes = document.getElementById('lidWarningMinutes').value;
   
+  if (!snoozeTimerMinutes || !scheduleWindowMinutes || !lidWarningMinutes) {
+    return showToast('All settings are required', 'error');
+  }
+
   try {
     await window.apiFetch('/device/snooze', {
       method: 'PUT',
-      body: { snoozeTimerMinutes: parseInt(snoozeTimerMinutes) }
+      body: JSON.stringify({ snoozeTimerMinutes, scheduleWindowMinutes, lidWarningMinutes })
     });
-    window.showToast('Snooze timer updated');
+    showToast('Device settings updated successfully', 'success');
   } catch (err) {}
 });
