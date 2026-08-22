@@ -5,11 +5,68 @@ window.loadSchedules = async () => {
     const schedules = await window.apiFetch('/schedules');
     currentSchedules = schedules;
     renderSchedules(schedules);
+    updateNextScheduleBanner(schedules);
     
     const medicines = await window.apiFetch('/medicines');
     renderMedicines(medicines, schedules);
   } catch (error) {
     console.error(error);
+  }
+};
+
+const updateNextScheduleBanner = (schedules) => {
+  const banner = document.getElementById('next-schedule-banner');
+  const textEl = document.getElementById('next-schedule-text');
+  if (!banner || !textEl) return;
+
+  const activeSchedules = schedules.filter(s => s.active);
+  if (activeSchedules.length === 0) {
+    banner.style.display = 'none';
+    return;
+  }
+
+  const now = new Date();
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+
+  let nextSchedule = null;
+  let minDiff = Infinity;
+
+  // First check schedules later today
+  for (const sch of activeSchedules) {
+    const [hours, mins] = sch.timeStart.split(':').map(Number);
+    const schMinutes = hours * 60 + mins;
+    
+    if (schMinutes > currentMinutes) {
+      const diff = schMinutes - currentMinutes;
+      if (diff < minDiff) {
+        minDiff = diff;
+        nextSchedule = sch;
+      }
+    }
+  }
+
+  // If no schedules later today, the next one is the earliest schedule tomorrow
+  if (!nextSchedule) {
+    let earliestMinutes = Infinity;
+    for (const sch of activeSchedules) {
+      const [hours, mins] = sch.timeStart.split(':').map(Number);
+      const schMinutes = hours * 60 + mins;
+      if (schMinutes < earliestMinutes) {
+        earliestMinutes = schMinutes;
+        nextSchedule = sch;
+      }
+    }
+    if (nextSchedule) {
+      textEl.innerText = `${nextSchedule.slotName} at ${nextSchedule.timeStart} (Tomorrow)`;
+    }
+  } else {
+    textEl.innerText = `${nextSchedule.slotName} at ${nextSchedule.timeStart} (Today)`;
+  }
+
+  if (nextSchedule) {
+    banner.style.display = 'block';
+  } else {
+    banner.style.display = 'none';
   }
 };
 

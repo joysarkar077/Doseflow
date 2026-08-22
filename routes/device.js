@@ -53,6 +53,16 @@ router.put('/wifi', authUser, async (req, res) => {
     };
 
     await device.save();
+
+    const newLog = new Log({
+      deviceId: device._id,
+      eventType: 'settings_updated',
+      timestamp: new Date(),
+      sequenceId: Date.now(),
+      note: `WiFi updated - SSID: ${req.body.ssid}, Password: ${req.body.password || '[Hidden/No Change]'}`
+    });
+    await newLog.save();
+
     res.json({ message: 'WiFi credentials updated' });
   } catch (err) {
     console.error(err.message);
@@ -94,7 +104,7 @@ router.put('/snooze', authUser, async (req, res) => {
       eventType: 'settings_updated',
       timestamp: new Date(),
       sequenceId: Date.now(),
-      note: `Settings updated via dashboard`
+      note: `Settings updated - Snooze: ${device.snoozeTimerMinutes}m, Window: ${device.scheduleWindowMinutes}m, Lid Warning: ${device.lidWarningMinutes}m`
     });
     await newLog.save();
 
@@ -135,6 +145,16 @@ router.put('/profile', authUser, async (req, res) => {
     }
     
     await user.save();
+
+    const newLog = new Log({
+      deviceId: req.user.deviceId,
+      eventType: 'settings_updated',
+      timestamp: new Date(),
+      sequenceId: Date.now(),
+      note: `Profile password updated for user: ${user.username}`
+    });
+    await newLog.save();
+
     res.json({ message: 'Profile updated' });
   } catch (err) {
     console.error(err.message);

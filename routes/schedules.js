@@ -31,8 +31,25 @@ router.post(
     if (!errors.isEmpty()) {
       return res.status(400).json({ errors: errors.array() });
     }
-
     try {
+      const { timeStart } = req.body;
+      const allSchedules = await Schedule.find({ deviceId: req.user.deviceId });
+      
+      const parseTime = (timeStr) => {
+        const [hours, mins] = timeStr.split(':').map(Number);
+        return hours * 60 + mins;
+      };
+      
+      const newTime = parseTime(timeStart);
+      for (let sch of allSchedules) {
+        const existingTime = parseTime(sch.timeStart);
+        const diff = Math.abs(newTime - existingTime);
+        const minDiff = Math.min(diff, 1440 - diff); // Account for midnight wrap-around
+        if (minDiff < 30) {
+          return res.status(400).json({ message: `Cannot set schedule within 30 minutes of existing schedule (${sch.timeStart})` });
+        }
+      }
+
       // Find the highest slot order
       const highestSlot = await Schedule.findOne({ deviceId: req.user.deviceId }).sort('-slotOrder');
       const newSlotOrder = highestSlot ? highestSlot.slotOrder + 1 : 0;
@@ -69,7 +86,26 @@ router.put('/:id', authUser, async (req, res) => {
 
     // Default schedules can't have their name changed, but can change time and active status
     const updateFields = {};
-    if (req.body.timeStart) updateFields.timeStart = req.body.timeStart;
+    if (req.body.timeStart) {
+      const parseTime = (timeStr) => {
+        const [hours, mins] = timeStr.split(':').map(Number);
+        return hours * 60 + mins;
+      };
+      
+      const newTime = parseTime(req.body.timeStart);
+      const allSchedules = await Schedule.find({ deviceId: req.user.deviceId, _id: { $ne: req.params.id } });
+      
+      for (let sch of allSchedules) {
+        const existingTime = parseTime(sch.timeStart);
+        const diff = Math.abs(newTime - existingTime);
+        const minDiff = Math.min(diff, 1440 - diff);
+        if (minDiff < 30) {
+          return res.status(400).json({ message: `Cannot set schedule within 30 minutes of existing schedule (${sch.timeStart})` });
+        }
+      }
+      updateFields.timeStart = req.body.timeStart;
+    }
+    
     if (req.body.timeEnd) updateFields.timeEnd = req.body.timeEnd;
     if (typeof req.body.active === 'boolean') updateFields.active = req.body.active;
     if (!schedule.isDefault && req.body.slotName) updateFields.slotName = req.body.slotName;
@@ -104,6 +140,13 @@ router.delete('/:id', authUser, async (req, res) => {
     }
 
     await Schedule.findByIdAndDelete(req.params.id);
+
+    // Remove this schedule from all medicines' dosePattern
+    await Medicine.updateMany(
+      { deviceId: schedule.deviceId },
+      { $pull: { dosePattern: { scheduleId: req.params.id } } }
+    );
+
     res.json({ message: 'Schedule removed' });
   } catch (err) {
     console.error(err.message);
