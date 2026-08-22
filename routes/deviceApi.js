@@ -26,8 +26,32 @@ const decrypt = (text) => {
 router.get('/:deviceId/schedules', authDevice, async (req, res) => {
   try {
     const schedules = await Schedule.find({ deviceId: req.device._id, active: true })
+      .sort('slotOrder')
       .select('slotName slotOrder timeStart timeEnd lastUpdated');
-    res.json(schedules);
+
+    const medicines = await Medicine.find({ deviceId: req.device._id, active: true });
+
+    // Format medicines with the "frequency" string (e.g. "1+0+1") based on all active schedules
+    const formattedMedicines = medicines.map(med => {
+      let patternStr = [];
+      schedules.forEach(sch => {
+        const dose = med.dosePattern.find(d => d.scheduleId && d.scheduleId.toString() === sch._id.toString());
+        patternStr.push(dose ? dose.quantity : 0);
+      });
+      return {
+        name: med.name,
+        frequency: patternStr.join('+')
+      };
+    });
+
+    // Embed the medicines array into each schedule response
+    const response = schedules.map(sch => {
+      const schObj = sch.toObject();
+      schObj.medicines = formattedMedicines;
+      return schObj;
+    });
+
+    res.json(response);
   } catch (err) {
     console.error(err.message);
     res.status(500).send('Server Error');
