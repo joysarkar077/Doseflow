@@ -25,9 +25,17 @@ const decrypt = (text) => {
 // @access  Private (Device API Key)
 router.get('/:deviceId/schedules', authDevice, async (req, res) => {
   try {
-    const schedules = await Schedule.find({ deviceId: req.device._id, active: true })
+    const allActiveSchedules = await Schedule.find({ deviceId: req.device._id, active: true })
       .sort('slotOrder')
-      .select('slotName slotOrder timeStart timeEnd lastUpdated');
+      .select('slotName slotOrder timeStart timeEnd lastUpdated lastConfirmedAt');
+
+    const todayString = new Date().toDateString();
+    const schedules = allActiveSchedules.filter(sch => {
+      if (sch.lastConfirmedAt && sch.lastConfirmedAt.toDateString() === todayString) {
+        return false;
+      }
+      return true;
+    });
 
     const medicines = await Medicine.find({ deviceId: req.device._id, active: true });
 
@@ -107,6 +115,12 @@ router.post('/:deviceId/logs', authDevice, async (req, res) => {
     });
 
     await newLog.save();
+
+    // If user confirmed the dose, mark the schedule as confirmed for today
+    if (eventType === 'user_confirmed' && scheduleId) {
+      await Schedule.findByIdAndUpdate(scheduleId, { lastConfirmedAt: new Date() });
+    }
+
     res.json({ success: true });
   } catch (err) {
     // Catch duplicate key error (code 11000) for unique sequenceId and return 200 OK
@@ -129,6 +143,26 @@ router.get('/:deviceId/status', authDevice, async (req, res) => {
       lastKnownIp: req.ip
     };
     await req.device.save();
+    res.json({ success: true });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send('Server Error');
+  }
+});
+
+// @route   POST api/deviceApi/:deviceId/acknowledge
+// @desc    Acknowledge schedule sync by device
+// @access  Private (Device API Key)
+router.post('/:deviceId/acknowledge', authDevice, async (req, res) => {
+  try {
+    const { timeStart } = req.body;
+    if (!timeStart) return res.status(400).json({ message: 'timeStart required' });
+
+    const schedule = await Schedule.findOne({ deviceId: req.device._id, timeStart, active: true });
+    if (schedule) {
+      schedule.isAcknowledgedByDevice = true;
+      await schedule.save();
+    }
     res.json({ success: true });
   } catch (err) {
     console.error(err.message);

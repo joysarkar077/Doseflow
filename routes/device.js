@@ -162,4 +162,17 @@ router.put('/profile', authUser, async (req, res) => {
   }
 });
 
+// @route   GET api/device/status
+// @desc    Get device online status
+// @access  Private
+router.get('/status', authUser, async (req, res) => {
+  try {
+    const device = await Device.findById(req.user.deviceId);
+    res.json(device.status || { online: false });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).send('Server Error');
+  }
+});
+
 module.exports = router;

@@ -16,6 +16,11 @@
       <li><a href="#" data-target="wifi">📶 WiFi</a></li>
       <li><a href="#" data-target="profile">👤 Profile</a></li>
     </ul>
+
+    <div class="device-status-indicator mt-2" style="padding: 1rem; color: #fff; font-size: 0.9rem; text-align: center; border-top: 1px solid rgba(255,255,255,0.1); margin-top: auto;">
+      <span id="device-online-status">Checking device status...</span>
+      <div id="device-last-seen" style="font-size: 0.8rem; color: rgba(255,255,255,0.7); margin-top: 4px;"></div>
+    </div>
   </nav>
 
   <main class="content">
@@ -41,6 +46,7 @@
                 <th>Slot</th>
                 <th>Time (Start)</th>
                 <th>Active</th>
+                <th>Sync</th>
                 <th>Actions</th>
               </tr>
             </thead>

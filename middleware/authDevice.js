@@ -15,6 +15,14 @@ const authDevice = async (req, res, next) => {
       return res.status(401).json({ message: 'Invalid API key' });
     }
 
+    // Mark device as online on any API hit
+    device.status = {
+      online: true,
+      lastSeenAt: new Date(),
+      lastKnownIp: req.ip
+    };
+    await device.save();
+
     req.device = device;
     next();
   } catch (err) {

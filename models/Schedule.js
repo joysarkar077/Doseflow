@@ -29,6 +29,13 @@ const ScheduleSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
+  isAcknowledgedByDevice: {
+    type: Boolean,
+    default: false
+  },
+  lastConfirmedAt: {
+    type: Date
+  },
   lastUpdated: {
     type: Date,
     default: Date.now

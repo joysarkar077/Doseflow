@@ -6,12 +6,34 @@ window.loadSchedules = async () => {
     currentSchedules = schedules;
     renderSchedules(schedules);
     updateNextScheduleBanner(schedules);
+    updateDeviceStatus();
     
     const medicines = await window.apiFetch('/medicines');
     renderMedicines(medicines, schedules);
   } catch (error) {
     console.error(error);
   }
+};
+
+const updateDeviceStatus = async () => {
+  try {
+    const status = await window.apiFetch('/device/status');
+    const statusEl = document.getElementById('device-online-status');
+    const lastSeenEl = document.getElementById('device-last-seen');
+    
+    if (statusEl && lastSeenEl) {
+      if (status.online) {
+        statusEl.innerHTML = '🟢 Online';
+        if (status.lastSeenAt) {
+          const diff = Math.floor((new Date() - new Date(status.lastSeenAt)) / 60000);
+          lastSeenEl.innerText = `Last seen: ${diff > 0 ? diff + ' mins ago' : 'Just now'}`;
+        }
+      } else {
+        statusEl.innerHTML = '🔴 Offline';
+        lastSeenEl.innerText = '';
+      }
+    }
+  } catch (err) {}
 };
 
 const updateNextScheduleBanner = (schedules) => {
@@ -83,6 +105,9 @@ const renderSchedules = (schedules) => {
       <td>
         <input type="checkbox" ${schedule.active ? 'checked' : ''} 
                onchange="toggleScheduleActive('${schedule._id}', this.checked)">
+      </td>
+      <td style="text-align: center; font-size: 1.2rem;" title="${schedule.isAcknowledgedByDevice ? 'Synced to Device' : 'Pending Sync'}">
+        ${schedule.isAcknowledgedByDevice ? '✅' : '⏳'}
       </td>
       <td>
         <button class="btn btn-secondary btn-sm" onclick="editSchedule('${schedule._id}')">Edit</button>

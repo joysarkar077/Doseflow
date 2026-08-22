@@ -60,7 +60,8 @@ router.post(
         timeStart: req.body.timeStart,
         timeEnd: req.body.timeEnd,
         slotOrder: newSlotOrder,
-        isDefault: false
+        isDefault: false,
+        isAcknowledgedByDevice: false
       });
 
       const schedule = await newSchedule.save();
@@ -109,6 +110,9 @@ router.put('/:id', authUser, async (req, res) => {
     if (req.body.timeEnd) updateFields.timeEnd = req.body.timeEnd;
     if (typeof req.body.active === 'boolean') updateFields.active = req.body.active;
     if (!schedule.isDefault && req.body.slotName) updateFields.slotName = req.body.slotName;
+
+    // Reset acknowledgment flag since schedule was modified
+    updateFields.isAcknowledgedByDevice = false;
 
     schedule = await Schedule.findByIdAndUpdate(
       req.params.id,
