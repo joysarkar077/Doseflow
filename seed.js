@@ -21,7 +21,7 @@ const seedDB = async () => {
     console.log('Creating device...');
     const device = await Device.create({
       deviceName: process.env.SEED_DEVICE_NAME || 'SMAB Device',
-      deviceApiKey: process.env.SEED_DEVICE_API_KEY || 'generate-a-random-key-here',
+      deviceApiKey: process.env.SEED_DEVICE_API_KEY || 'smab-api-key-dev',
       snoozeTimerMinutes: 10,
       status: { online: false }
     });
