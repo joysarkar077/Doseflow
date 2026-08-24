@@ -102,14 +102,32 @@ router.get('/:deviceId/wifi', authDevice, async (req, res) => {
 // @access  Private (Device API Key)
 router.post('/:deviceId/logs', authDevice, async (req, res) => {
   try {
-    const { eventType, timestamp, sequenceId, scheduleId, medicineId, note } = req.body;
+    let { eventType, timestamp, sequenceId, scheduleId, medicineId, note } = req.body;
+
+    // Normalize common eventType misspellings from firmware
+    const typeMap = {
+      'lid_open': 'lid_opened',
+      'lid_close': 'lid_closed',
+      'user_confirm': 'user_confirmed',
+      'snooze': 'snoozed',
+      'reminder': 'reminder_due'
+    };
+    if (typeMap[eventType]) {
+      eventType = typeMap[eventType];
+    }
+
+    // Handle invalid timestamps gracefully
+    let parsedTimestamp = new Date(timestamp);
+    if (isNaN(parsedTimestamp.getTime())) {
+      parsedTimestamp = new Date(); // Fallback to now if invalid
+    }
 
     const newLog = new Log({
       deviceId: req.device._id,
       scheduleId: scheduleId || null,
       medicineId: medicineId || null,
       eventType,
-      timestamp,
+      timestamp: parsedTimestamp,
       sequenceId,
       note
     });
@@ -127,8 +145,8 @@ router.post('/:deviceId/logs', authDevice, async (req, res) => {
     if (err.code === 11000) {
       return res.json({ success: true, message: 'Duplicate sequenceId ignored' });
     }
-    console.error(err.message);
-    res.status(500).send('Server Error');
+    console.error('Log save error:', err);
+    res.status(500).json({ success: false, message: 'Server Error', error: err.message });
   }
 });
 
