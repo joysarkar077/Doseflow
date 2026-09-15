@@ -39,6 +39,60 @@ Users can remotely configure the behavior of the physical smart box through the 
 - **Authentication:** Secure login and user profile management, backed by JWT/Sessions and encrypted passwords.
 - **Notification System:** Opt-in to receive browser alerts when doses are missed or if the box is opened unexpectedly.
 
+## 🚀 Quick Start Guide
+
+### 1. Hardware Setup (Arduino & ESP32)
+1. **Download the Arduino IDE** and ensure you have the ESP32 board manager installed.
+2. **Flash the Arduino:**
+   - Open the `Arduino Code.txt` file (or copy its contents into a new `.ino` file).
+   - Select your Arduino board (e.g., Arduino Uno/Nano).
+   - Install any required sensor/display libraries.
+   - Connect the Arduino to your PC via USB and hit **Upload**.
+3. **Flash the ESP32:**
+   - Open the `ESP32 Code.txt` file (or copy its contents into a new `.ino` file).
+   - Select your ESP32 board in the Arduino IDE.
+   - Install required libraries (e.g., `ESPAsyncWebServer`, `WiFi`).
+   - Connect the ESP32 to your PC and hit **Upload**.
+4. **Wiring:** Connect the components (sensors, Arduino, ESP32) as specified in the project report.
+
+### 2. Web Dashboard Setup
+1. **Install Node.js & Dependencies:**
+   Ensure Node.js is installed. Then, open a terminal in the project directory and run:
+   ```bash
+   npm install
+   ```
+2. **Environment Variables Configuration:**
+   Create a `.env` file in the root directory and configure the following required variables:
+   ```env
+   PORT=3000
+   NODE_ENV=development
+   
+   # MongoDB Connection String
+   MONGODB_URI=mongodb://<username>:<password>@<cluster-url>/Smart-Medicine-Adherence-System
+   
+   # JSON Web Token
+   JWT_SECRET=your_super_secret_jwt_key_here
+   JWT_EXPIRES_IN=7d
+   
+   # WiFi password encryption (AES-256-CBC — must be exactly 32 characters)
+   WIFI_ENCRYPTION_KEY=12345678901234567890123456789012
+   
+   # Initial seed values (used to create the first admin account and device)
+   SEED_USERNAME=admin
+   SEED_PASSWORD=admin
+   SEED_DEVICE_NAME=SMAB Device
+   SEED_DEVICE_API_KEY=smab-api-key-dev
+   ```
+3. **Seed the Database (First Run Only):**
+   ```bash
+   node seed.js
+   ```
+4. **Start the Server:**
+   ```bash
+   npm start
+   ```
+   The dashboard will now be accessible at `http://localhost:3000`. Log in using the credentials defined in your `.env` file.
+
 ## 🛠️ Technology Stack
 - **Backend:** Node.js + Express
 - **Database:** MongoDB (Mongoose ODM)
