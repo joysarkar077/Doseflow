@@ -1,0 +1,332 @@
+/*
+  DoseFlow - Final Arduino Firmware (Demo Ready)
+*/
+
+#include <SoftwareSerial.h>
+#include <U8g2lib.h>
+#include <Wire.h>
+#include <RTClib.h>
+#include <VL53L0X.h>
+
+const int TOUCH_PIN = 2;
+const int SNOOZE_PIN = 3;
+const int LIMIT_PIN = 4; // Single Limit Switch
+const int SOFT_RX = 5;
+const int SOFT_TX = 6;
+const int BUZZER_PIN = 8;
+
+SoftwareSerial espSerial(SOFT_RX, SOFT_TX);
+U8G2_SH1106_128X64_NONAME_1_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
+RTC_DS3231 rtc;
+VL53L0X tof;
+
+char scheduledTime[6] = "--:--";
+char medList[64] = "Awaiting Sync..."; 
+char ipAddress[16] = "IP: WAIT";
+
+bool blinkState = false;
+unsigned long lastBlink = 0;
+
+enum SystemState { WAITING, DUE, SNOOZED, CONFIRMED, MISSED };
+SystemState currentState = WAITING;
+
+unsigned long snoozeDuration = 10UL * 60UL * 1000UL; 
+const unsigned long GRACE_PERIOD = 30UL * 60UL * 1000UL;
+unsigned long alarmStartTime = 0;
+unsigned long snoozeStartTime = 0;
+unsigned long stateTimer = 0; 
+unsigned long lidOpenedAt = 0;
+
+bool isLidCurrentlyOpen = false;
+bool lidWarningLogged = false;
+
+// OLED Alert Overlay Variables
+char activeAlertMsg[32] = "";
+unsigned long alertStartTime = 0;
+const unsigned long ALERT_DISPLAY_TIME = 4000; 
+
+// Button Latches
+volatile bool touchLatched = false;
+volatile bool snoozeLatched = false;
+bool hasSnoozed = false; 
+
+void triggerOLEDAlert(const char* msg) {
+  strncpy(activeAlertMsg, msg, sizeof(activeAlertMsg) - 1);
+  activeAlertMsg[sizeof(activeAlertMsg) - 1] = '\0'; 
+  alertStartTime = millis();
+}
+
+void logEvent(const char* eventType, unsigned long responseSec = 0) {
+  DateTime now = rtc.now();
+  int yr = now.year();
+  int mo = now.month();
+  int dy = now.day();
+  
+  // FAILSAFE: Prevent MongoDB 500 errors if RTC I2C wires get bumped during demo
+  if (yr < 2024 || yr > 2030) {
+    yr = 2026;
+    mo = 8;
+    dy = 24;
+  }
+
+  char isoBuf[25];
+  snprintf(isoBuf, sizeof(isoBuf), "%04d-%02d-%02dT%02d:%02d:%02dZ", 
+           yr, mo, dy, now.hour(), now.minute(), now.second());
+           
+  espSerial.print(F("L:"));
+  espSerial.print(eventType);
+  espSerial.print(F(","));
+  espSerial.print(responseSec);
+  espSerial.print(F(","));
+  espSerial.println(isoBuf);
+}
+
+void setup() {
+  Serial.begin(9600);
+  espSerial.begin(9600);
+  Wire.begin();
+
+  pinMode(TOUCH_PIN, INPUT);
+  pinMode(SNOOZE_PIN, INPUT_PULLUP);
+  pinMode(LIMIT_PIN, INPUT_PULLUP);
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, LOW);
+
+  u8g2.begin();
+  rtc.begin();
+  
+  if (rtc.lostPower()) {
+    logEvent("rtc_fault");
+    triggerOLEDAlert("RTC FAULT!"); 
+  }
+
+  tof.setTimeout(500);
+  if (tof.init()) tof.startContinuous(250);
+}
+
+void checkButtons() {
+  if (digitalRead(TOUCH_PIN) == HIGH) touchLatched = true;
+  if (digitalRead(SNOOZE_PIN) == LOW) snoozeLatched = true;
+}
+
+void checkLidState() {
+  bool mechOpen = (digitalRead(LIMIT_PIN) == HIGH); 
+  uint16_t dist = tof.readRangeContinuousMillimeters();
+  bool tofOpen = (!tof.timeoutOccurred() && dist > 60 && dist < 8000);
+  
+  static bool lastDisagreement = false;
+  bool currentDisagreement = (mechOpen != tofOpen);
+
+  // Suppress disagreement spam, only trigger on change
+  if (currentDisagreement && !lastDisagreement) {
+    logEvent("sensor_disagreement");
+    triggerOLEDAlert("SENSOR MISMATCH!"); 
+  }
+  lastDisagreement = currentDisagreement;
+
+  // STRICT FAILSAFE: Only trust the mechanical limit switch for lid state
+  if (mechOpen && !isLidCurrentlyOpen) { 
+    isLidCurrentlyOpen = true; 
+    lidOpenedAt = millis();
+    lidWarningLogged = false;
+
+    if (currentState == WAITING) {
+      logEvent("unscheduled_access");
+      triggerOLEDAlert("UNSCHEDULED ACCESS"); 
+    } else {
+      logEvent("lid_opened");
+    }
+  } 
+  else if (!mechOpen && isLidCurrentlyOpen) { 
+    isLidCurrentlyOpen = false; 
+    logEvent("lid_closed"); 
+    triggerOLEDAlert("LID CLOSED"); 
+  }
+}
+
+void handleSerialCommands() {
+  if (espSerial.available() > 0) {
+    String packet = espSerial.readStringUntil('\n');
+    packet.trim();
+
+    if (packet.startsWith(F("S:"))) { 
+      int comma = packet.lastIndexOf(','); 
+      if (comma > 0) {
+        String newTime = packet.substring(comma + 1);
+        if (newTime != String(scheduledTime)) {
+          hasSnoozed = false; 
+        }
+        packet.substring(2, comma).toCharArray(medList, sizeof(medList));
+        newTime.toCharArray(scheduledTime, sizeof(scheduledTime));
+        espSerial.print(F("A:"));
+        espSerial.println(scheduledTime);
+      }
+    }
+    else if (packet.startsWith(F("I:"))) {
+      packet.substring(2).toCharArray(ipAddress, sizeof(ipAddress));
+    }
+    else if (packet.startsWith(F("SET_TIME:"))) { 
+      int yr = packet.substring(9, 13).toInt();
+      int mo = packet.substring(14, 16).toInt();
+      int d  = packet.substring(17, 19).toInt();
+      int h  = packet.substring(20, 22).toInt();
+      int m  = packet.substring(23, 25).toInt();
+      int s  = packet.substring(26, 28).toInt();
+      rtc.adjust(DateTime(yr, mo, d, h, m, s));
+    }
+    else if (packet.startsWith(F("CFG:"))) {
+      snoozeDuration = packet.substring(4).toInt() * 60UL * 1000UL;
+    }
+  }
+}
+
+void runStateMachine() {
+  DateTime now = rtc.now();
+  char currentHHMM[8];
+  snprintf(currentHHMM, sizeof(currentHHMM), "%02d:%02d", now.hour(), now.minute());
+  
+  bool touched = touchLatched;
+  bool snoozeBtn = snoozeLatched;
+  touchLatched = false; 
+  snoozeLatched = false;
+
+  switch (currentState) {
+    case WAITING:
+      if (strcmp(currentHHMM, scheduledTime) == 0 && strcmp(scheduledTime, "--:--") != 0) {
+        currentState = DUE;
+        alarmStartTime = millis();
+        logEvent("reminder_due");
+      }
+      break;
+
+    case DUE:
+      digitalWrite(BUZZER_PIN, (millis() % 1000 < 500) ? HIGH : LOW);
+      
+      if (isLidCurrentlyOpen && touched) {
+        digitalWrite(BUZZER_PIN, LOW); 
+        currentState = CONFIRMED;
+        stateTimer = millis();
+        logEvent("user_confirmed", (millis() - alarmStartTime) / 1000); 
+      } 
+      else if (snoozeBtn && !hasSnoozed) {
+        digitalWrite(BUZZER_PIN, LOW); 
+        currentState = SNOOZED;
+        snoozeStartTime = millis(); 
+        hasSnoozed = true; 
+        logEvent("snoozed"); 
+      } 
+      else if (millis() - alarmStartTime > GRACE_PERIOD) {
+        digitalWrite(BUZZER_PIN, LOW); 
+        currentState = MISSED; 
+        stateTimer = millis();
+        logEvent("missed");
+      }
+      break;
+      
+    case SNOOZED:
+      if (isLidCurrentlyOpen && touched) { 
+        currentState = CONFIRMED; 
+        stateTimer = millis();
+        logEvent("user_confirmed", (millis() - alarmStartTime) / 1000); 
+      }
+      else if (millis() - snoozeStartTime > snoozeDuration) {
+        currentState = DUE; 
+      }
+      break;
+      
+    case CONFIRMED:
+      if (millis() - stateTimer > 4000) {
+        strcpy(scheduledTime, "--:--");
+        strcpy(medList, "Next Slot...");
+        currentState = WAITING; 
+      }
+      break;
+      
+    case MISSED:
+      if (millis() - stateTimer > 10000) {
+        strcpy(scheduledTime, "--:--");
+        strcpy(medList, "Next Slot...");
+        currentState = WAITING;
+      }
+      break;
+  }
+}
+
+void drawUI() {
+  DateTime now = rtc.now();
+  char currentHHMM[8];
+  snprintf(currentHHMM, sizeof(currentHHMM), "%02d:%02d", now.hour(), now.minute());
+
+  u8g2.firstPage();
+  do {
+    // TOP BAR: IP and WiFi status
+    u8g2.setFont(u8g2_font_5x7_tr);
+    u8g2.drawFrame(0, 2, 10, 6); u8g2.drawBox(10, 3, 2, 4); 
+    u8g2.setFont(u8g2_font_6x12_tr); 
+    u8g2.drawStr(20, 9, ipAddress);
+    u8g2.drawLine(0, 12, 128, 12);
+
+    // EXTREME PRIORITY: 15-Min Lid Alarm Override (Takes full screen)
+    if (isLidCurrentlyOpen && (millis() - lidOpenedAt > 15 * 60000UL)) {
+      u8g2.setFont(u8g2_font_ncenB14_tr);
+      if (blinkState) u8g2.drawStr(10, 35, "WARNING!");
+      u8g2.setFont(u8g2_font_6x12_tr);
+      u8g2.drawStr(25, 55, "CLOSE LID");
+      digitalWrite(BUZZER_PIN, (millis() % 500 < 250) ? HIGH : LOW);
+      if (!lidWarningLogged) { logEvent("lid_left_open_warning"); lidWarningLogged = true; }
+      continue; 
+    }
+
+    // MAIN UI CENTER
+    if (currentState == DUE) {
+      u8g2.setFont(u8g2_font_ncenB14_tr); 
+      u8g2.drawStr(10, 35, "TAKE MEDS");
+    } 
+    else if (currentState == SNOOZED) {
+      u8g2.setFont(u8g2_font_ncenB14_tr);
+      u8g2.drawStr(30, 35, currentHHMM);
+      u8g2.drawFrame(100, 23, 28, 15);
+      u8g2.setFont(u8g2_font_6x12_tr);
+      u8g2.drawStr(106, 35, "Zz");
+    }
+    else if (currentState == CONFIRMED) {
+      u8g2.setFont(u8g2_font_6x12_tr);
+      u8g2.drawStr(25, 35, "CONFIRMED!");
+    }
+    else if (currentState == MISSED) {
+      u8g2.setFont(u8g2_font_6x12_tr);
+      u8g2.drawStr(20, 35, "MISSED DOSE");
+    }
+    else {
+      u8g2.setFont(u8g2_font_ncenB14_tr);
+      u8g2.drawStr(30, 35, currentHHMM);
+    }
+
+    // BOTTOM UI (Alerts override this row ONLY for 4 seconds)
+    if (millis() - alertStartTime < ALERT_DISPLAY_TIME) {
+      u8g2.setFont(u8g2_font_6x12_tr);
+      int strW = u8g2.getStrWidth(activeAlertMsg);
+      u8g2.drawStr((128 - strW)/2, 55, activeAlertMsg); 
+    } 
+    else {
+      // Normal Bottom Text
+      u8g2.setFont(u8g2_font_6x12_tr);
+      if (currentState == DUE || currentState == SNOOZED) {
+        u8g2.drawStr(0, 55, medList);
+      }
+      else if (currentState == WAITING) {
+        u8g2.drawStr(0, 55, "Next: ");
+        u8g2.drawStr(35, 55, scheduledTime);
+      }
+    }
+  } while (u8g2.nextPage());
+}
+
+void loop() {
+  if (millis() - lastBlink > 500) { blinkState = !blinkState; lastBlink = millis(); }
+  checkButtons(); 
+  checkLidState();
+  handleSerialCommands();
+  runStateMachine();
+  drawUI();
+}

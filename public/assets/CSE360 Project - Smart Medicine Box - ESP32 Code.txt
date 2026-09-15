@@ -1,0 +1,410 @@
+/*
+  DoseFlow - Final ESP32 Firmware (Captive Portal + Strict Log Sync)
+*/
+
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <HTTPClient.h>
+#include <DNSServer.h>
+#include <ESPAsyncWebServer.h>
+#include <LittleFS.h>
+#include <Preferences.h>
+#include <ArduinoJson.h>
+#include <time.h>
+
+// ================= CLOUD API CONFIGURATION =================
+const char* API_BASE_URL = "https://dose.joysarkar.app/api/deviceApi/6a7fbd913007fed228f9b1aa";
+const char* API_KEY      = "smab-api-key-dev";
+// ===========================================================
+
+HardwareSerial SerialToArduino(2); // RX2=16, TX2=17
+AsyncWebServer server(80);
+DNSServer dnsServer;
+Preferences preferences;
+
+const byte DNS_PORT = 53;
+String ssid = "";
+String password = "";
+int sequenceId = 1;
+bool isAPMode = false;
+
+int snoozeTimerMinutes = 10;
+String currentNextMeds = "Awaiting Sync...";
+String currentNextTime = "--:--";
+int pendingLogsCount = 0;
+bool isAcknowledged = false;
+
+int wifiFailCount = 0;
+const int WIFI_FAIL_LIMIT = 5; 
+
+// ---------------- Captive portal + status page HTML ----------------
+const char index_html[] PROGMEM = R"rawliteral(
+<!DOCTYPE html><html><head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body{font-family:sans-serif;background:#0f111a;color:#f0f2f5;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;padding:20px;box-sizing:border-box;}
+.card{background:rgba(25,28,41,0.7);border:1px solid rgba(255,255,255,0.1);border-radius:12px;padding:24px;width:100%;max-width:400px;}
+input{width:100%;padding:12px;margin-bottom:16px;border-radius:6px;border:1px solid rgba(255,255,255,0.1);background:rgba(0,0,0,0.2);color:white;box-sizing:border-box;}
+button{background:#3b82f6;color:white;width:100%;padding:12px;border:none;border-radius:6px;font-weight:bold;cursor:pointer;}
+</style></head><body>
+<div class="card">
+<h1>DoseFlow Setup</h1>
+<form action="/save" method="POST">
+<input type="text" name="ssid" placeholder="WiFi SSID (2.4GHz Only)" required>
+<input type="password" name="password" placeholder="WiFi Password" required>
+<input type="number" name="snooze" value="10" placeholder="Snooze Time (mins)" required>
+<button type="submit">Initialize Device</button>
+</form></div></body></html>
+)rawliteral";
+
+const char status_html[] PROGMEM = R"rawliteral(
+<!DOCTYPE html><html><head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body{font-family:sans-serif;background:#0f111a;color:#f0f2f5;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;padding:20px;box-sizing:border-box;}
+.card{background:rgba(25,28,41,0.7);border:1px solid rgba(255,255,255,0.1);border-radius:12px;padding:24px;width:100%;max-width:420px;}
+.grid{display:grid;gap:12px;margin-bottom:24px;}
+.box{background:rgba(0,0,0,0.2);border:1px solid rgba(255,255,255,0.1);border-radius:12px;padding:16px;}
+button{background:rgba(239,68,68,0.1);color:#ef4444;width:100%;padding:12px;border:1px solid rgba(239,68,68,0.2);border-radius:8px;font-weight:bold;cursor:pointer;}
+</style></head><body>
+<div class="card">
+<h1>DoseFlow Node</h1>
+<div class="grid">
+<div class="box"><b>Next Dose:</b> %NEXT_TIME%<br>%NEXT_MEDS%<br>Screen: %ACK_TEXT%</div>
+<div class="box"><b>Network:</b> %SSID%<br><b>Pending Syncs:</b> %LOGS%</div>
+</div>
+<form action="/reset" method="POST"><button type="submit">Forget Network</button></form>
+</div></body></html>
+)rawliteral";
+
+String processor(const String& var){
+  if (var == "SSID") return ssid;
+  if (var == "NEXT_TIME") return currentNextTime;
+  if (var == "NEXT_MEDS") return currentNextMeds;
+  if (var == "LOGS") return String(pendingLogsCount);
+  if (var == "ACK_TEXT") return isAcknowledged ? "Displayed" : "Pending Sync";
+  return String();
+}
+
+// ---------------- Local flash log buffer ----------------
+void saveLogLocally(String eventType, String isoTime, int currentSeqId) {
+  File file = LittleFS.open("/logs.json", "r");
+  DynamicJsonDocument doc(4096);
+  if (file) { deserializeJson(doc, file); file.close(); }
+  JsonArray array = doc.as<JsonArray>();
+  if (array.isNull()) array = doc.to<JsonArray>();
+  
+  JsonObject newLog = array.createNestedObject();
+  newLog["eventType"] = eventType;
+  newLog["timestamp"] = isoTime;
+  newLog["sequenceId"] = currentSeqId;
+  newLog["synced"] = false;
+  
+  File writeFile = LittleFS.open("/logs.json", "w");
+  if (writeFile) { serializeJson(doc, writeFile); writeFile.close(); }
+  pendingLogsCount++;
+  Serial.println("Saved local log: " + eventType);
+}
+
+void syncLogsToAPI() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  File file = LittleFS.open("/logs.json", "r");
+  if (!file) return;
+  
+  DynamicJsonDocument doc(4096);
+  if (deserializeJson(doc, file)) return;
+  file.close();
+  
+  JsonArray array = doc.as<JsonArray>();
+  bool updated = false;
+  int unsyncedCount = 0;
+  WiFiClientSecure client;
+  client.setInsecure(); 
+
+  for (JsonObject log : array) {
+    if (log["synced"] == false) {
+      HTTPClient http;
+      http.begin(client, String(API_BASE_URL) + "/logs");
+      http.addHeader("Content-Type", "application/json");
+      http.addHeader("x-api-key", API_KEY);
+      
+      StaticJsonDocument<256> apiPayload;
+      apiPayload["eventType"] = log["eventType"];
+      apiPayload["timestamp"] = log["timestamp"];
+      apiPayload["sequenceId"] = log["sequenceId"];
+      String jsonString;
+      serializeJson(apiPayload, jsonString);
+      
+      Serial.println("POSTing log to API...");
+      int httpCode = http.POST(jsonString);
+      Serial.print("HTTP Code: "); Serial.println(httpCode);
+      
+      // STRICT CHECK: Only mark as synced if server confirms success
+      if (httpCode == 200 || httpCode == 201) { 
+        log["synced"] = true; 
+        updated = true; 
+        Serial.println("SUCCESS: Log safely synced to MongoDB!");
+      } 
+      else { 
+        unsyncedCount++; 
+        Serial.println("API Error or Timeout. Log kept safely in flash memory.");
+      }
+      http.end();
+    }
+  }
+  
+  pendingLogsCount = unsyncedCount;
+  if (updated) {
+    File writeFile = LittleFS.open("/logs.json", "w");
+    if (writeFile) { serializeJson(doc, writeFile); writeFile.close(); }
+  }
+}
+
+void sendAckToBackend(String ackTime) {
+  if (WiFi.status() != WL_CONNECTED) return;
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  http.begin(client, String(API_BASE_URL) + "/acknowledge");
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("x-api-key", API_KEY);
+  StaticJsonDocument<128> payload;
+  payload["timeStart"] = ackTime;
+  String jsonString;
+  serializeJson(payload, jsonString);
+  http.POST(jsonString);
+  http.end();
+}
+
+void sendStatusPing() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  http.begin(client, String(API_BASE_URL) + "/status");
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("x-api-key", API_KEY);
+  StaticJsonDocument<128> payload;
+  payload["online"] = true;
+  payload["ip"] = WiFi.localIP().toString();
+  String jsonString;
+  serializeJson(payload, jsonString);
+  http.POST(jsonString);
+  http.end();
+}
+
+void fetchScheduleFromAPI() {
+  if (WiFi.status() != WL_CONNECTED) return;
+
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  http.begin(client, String(API_BASE_URL) + "/schedules");
+  http.addHeader("x-api-key", API_KEY);
+
+  int httpCode = http.GET();
+  if (httpCode != 200) { http.end(); return; }
+
+  DynamicJsonDocument doc(4096);
+  deserializeJson(doc, http.getString());
+  http.end();
+
+  if (doc.size() == 0) return;
+
+  struct tm timeinfo;
+  bool haveTime = getLocalTime(&timeinfo, 2000);
+  int nowMinutes = haveTime ? (timeinfo.tm_hour * 60 + timeinfo.tm_min) : -1;
+
+  int bestDiff = 24 * 60 + 1; 
+  JsonObject bestSlot;
+  bool found = false;
+
+  for (JsonObject slot : doc.as<JsonArray>()) {
+    if (!slot["active"].isNull() && slot["active"] == false) continue;
+    String t = slot["timeStart"].as<String>();
+    int colon = t.indexOf(':');
+    if (colon < 0) continue;
+    int slotMinutes = t.substring(0, colon).toInt() * 60 + t.substring(colon + 1).toInt();
+
+    int diff;
+    if (nowMinutes < 0) {
+      diff = slotMinutes; 
+    } else {
+      diff = slotMinutes - nowMinutes;
+      if (diff < 0) diff += 24 * 60; 
+    }
+
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      bestSlot = slot;
+      found = true;
+    }
+  }
+
+  if (!found) return;
+
+  String fetchedTime = bestSlot["timeStart"].as<String>();
+  String slotName = bestSlot["slotName"].as<String>();
+  String medString = "";
+  JsonArray medicines = bestSlot["medicines"].as<JsonArray>();
+  
+  for (JsonObject med : medicines) {
+    String freq = med["frequency"].as<String>();
+    bool shouldTakeNow = false;
+    if (freq.length() >= 5) {
+      if (slotName == "Morning" && freq.charAt(0) == '1') shouldTakeNow = true;
+      else if (slotName == "Noon" && freq.charAt(2) == '1') shouldTakeNow = true;
+      else if (slotName == "Night" && freq.charAt(4) == '1') shouldTakeNow = true;
+    }
+    if (shouldTakeNow) {
+      if (medString.length() > 0) medString += ", ";
+      medString += med["name"].as<String>();
+    }
+  }
+  if (medString == "") medString = slotName;
+
+  if (fetchedTime != currentNextTime) isAcknowledged = false;
+  currentNextTime = fetchedTime;
+  currentNextMeds = medString;
+
+  SerialToArduino.println("S:" + currentNextMeds + "," + currentNextTime);
+  Serial.println("Updated Schedule: " + currentNextTime);
+}
+
+void maintainWiFi() {
+  if (isAPMode) return;
+  if (WiFi.status() == WL_CONNECTED) {
+    wifiFailCount = 0;
+    return;
+  }
+  wifiFailCount++;
+  Serial.println("WiFi disconnected, attempting reconnect (" + String(wifiFailCount) + ")");
+  WiFi.disconnect();
+  WiFi.begin(ssid.c_str(), password.c_str());
+
+  if (wifiFailCount >= WIFI_FAIL_LIMIT) {
+    Serial.println("Too many failed reconnects - restarting into AP mode");
+    ESP.restart(); 
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  SerialToArduino.begin(9600, SERIAL_8N1, 16, 17);
+  pinMode(0, INPUT_PULLUP);
+
+  LittleFS.begin(true);
+  preferences.begin("smab", false);
+  
+  // Wipe settings if BOOT button is held down
+  if (digitalRead(0) == LOW) { preferences.clear(); delay(2000); }
+
+  ssid = preferences.getString("ssid", "");
+  password = preferences.getString("pass", "");
+  snoozeTimerMinutes = preferences.getInt("snooze", 10);
+  sequenceId = preferences.getInt("seqId", 1);
+  SerialToArduino.println("CFG:" + String(snoozeTimerMinutes));
+
+  WiFi.setAutoReconnect(true);
+
+  if (ssid != "") {
+    Serial.println("Connecting to saved Wi-Fi...");
+    WiFi.begin(ssid.c_str(), password.c_str());
+    int attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < 20) { delay(500); attempts++; }
+  }
+
+  // AP MODE (Captive Portal)
+  if (WiFi.status() != WL_CONNECTED) {
+    SerialToArduino.println("I:Setup WiFi");
+    isAPMode = true;
+    WiFi.disconnect(true, true);
+    delay(500); WiFi.mode(WIFI_AP); delay(100); WiFi.softAP("Smart-Me Setup"); delay(500);
+    dnsServer.start(DNS_PORT, "*", WiFi.softAPIP());
+    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){ request->send_P(200, "text/html", index_html); });
+    server.on("/save", HTTP_POST, [](AsyncWebServerRequest *request){
+      if (request->hasParam("ssid", true)) { String input = request->getParam("ssid", true)->value(); input.trim(); preferences.putString("ssid", input); }
+      if (request->hasParam("password", true)) { String input = request->getParam("password", true)->value(); input.trim(); preferences.putString("pass", input); }
+      if (request->hasParam("snooze", true)) preferences.putInt("snooze", request->getParam("snooze", true)->value().toInt());
+      request->send(200, "text/plain", "Credentials saved! Rebooting...");
+      delay(2000); ESP.restart();
+    });
+    server.onNotFound([](AsyncWebServerRequest *request){ request->redirect("http://" + WiFi.softAPIP().toString() + "/"); });
+    server.begin();
+    Serial.println("Started Captive Portal AP: Smart-Me Setup");
+  } 
+  // CONNECTED MODE
+  else {
+    SerialToArduino.println("I:" + WiFi.localIP().toString());
+    isAPMode = false;
+    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){ request->send_P(200, "text/html", status_html, processor); });
+    server.on("/reset", HTTP_POST, [](AsyncWebServerRequest *request){ preferences.clear(); request->send(200, "text/plain", "Settings wiped. Rebooting..."); delay(2000); ESP.restart(); });
+    server.begin();
+
+    // NTP Time Sync
+    configTime(6 * 3600, 0, "pool.ntp.org");
+    struct tm timeinfo;
+    if (getLocalTime(&timeinfo, 10000)) {
+      char timeCmd[35];
+      snprintf(timeCmd, sizeof(timeCmd), "SET_TIME:%04d,%02d,%02d,%02d,%02d,%02d",
+               timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday, timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+      SerialToArduino.println(timeCmd);
+    }
+    fetchScheduleFromAPI();
+    syncLogsToAPI();
+    sendStatusPing();
+  }
+}
+
+void loop() {
+  if (isAPMode) {
+    dnsServer.processNextRequest();
+    return;
+  }
+
+  maintainWiFi();
+
+  // Read incoming events from Arduino via UART
+  if (SerialToArduino.available() > 0) {
+    String packet = SerialToArduino.readStringUntil('\n');
+    packet.trim();
+
+    Serial.println("UART from Arduino: " + packet);
+
+    if (packet.startsWith("A:")) {
+      isAcknowledged = true;
+      sendAckToBackend(packet.substring(2));
+    }
+    else if (packet.startsWith("L:")) {
+      int firstComma = packet.indexOf(',');
+      int secondComma = packet.indexOf(',', firstComma + 1);
+      if (firstComma > 0 && secondComma > 0) {
+        String eventType = packet.substring(2, firstComma);
+        String isoTime = packet.substring(secondComma + 1);
+        int currentSeq = sequenceId++;
+        preferences.putInt("seqId", sequenceId);
+
+        saveLogLocally(eventType, isoTime, currentSeq);
+        syncLogsToAPI();
+
+        if (eventType == "user_confirmed" || eventType == "missed") {
+          delay(3000);
+          fetchScheduleFromAPI();
+        }
+      }
+    }
+  }
+
+  // Periodic Background Sync Loops
+  static unsigned long lastSync = 0;
+  static unsigned long lastStatus = 0;
+  if (millis() - lastSync > 30000) {
+    lastSync = millis();
+    syncLogsToAPI();
+    fetchScheduleFromAPI();
+  }
+  if (millis() - lastStatus > 60000) { 
+    lastStatus = millis();
+    sendStatusPing();
+  }
+}
