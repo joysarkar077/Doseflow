@@ -5,6 +5,11 @@ DoseFlow is a comprehensive IoT system designed to track and encourage medicatio
 ## 🎥 Demonstration Video
 [Watch the Demonstration Video](https://www.choto.cc/CSE360Demo)
 
+## 🌐 Live Web Dashboard
+The web application is deployed and actively running at:
+- [dose.joysarkar.app](https://dose.joysarkar.app/) (Primary)
+- [jsdoseflow.vercel.app](https://jsdoseflow.vercel.app/) (Backup)
+
 ## 📁 Project Documents & Source Code
 The following files are available in the `public/assets/` directory:
 - [CSE360 Project Report (PDF)](public/assets/CSE360%20Project%20Report.pdf)
