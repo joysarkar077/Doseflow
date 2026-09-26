@@ -1,6 +1,25 @@
 # DoseFlow: Smart Medicine Adherence Box
 
-DoseFlow is a comprehensive IoT system designed to track and encourage medication adherence through a smart physical medicine box paired with a web dashboard.
+DoseFlow is a comprehensive IoT system designed to track and encourage medication adherence through a smart physical medicine box paired with a web dashboard. This project was developed as the term lab project for **CSE360: Computer Interfacing** at **BRAC University (BRACU)**.
+
+## 🎓 Academic Project Details
+- **Course:** CSE360: Computer Interfacing
+- **Institution:** BRAC University (BRACU), Department of Computer Science and Engineering
+- **Group:** Group 3 (Section 5)
+
+### Team Members
+| Name | Student ID | Responsibilities |
+| :--- | :--- | :--- |
+| **Jotee Sarkar Joy** | 22301001 | Hardware Design, Power Management & Prototyping |
+| **Subrina Jerrin Akter** | 22201142 | Firmware Development (Arduino FSM & ESP32 Captive Portal) |
+| **Md. Abir Hasan Rohan** | 22101294 | Cloud Backend (Node/Express/MongoDB) & Web Dashboard |
+| **Shees Mohammad Hossain Saud** | 20101234 | System Integration, Sensor Calibration & Documentation |
+
+### 🔌 Key Interfacing Concepts Implemented
+- **I2C Bus Communication:** Multi-device digital communication connecting the Arduino Uno to the DS3231 Real-Time Clock, 1.3" SH1106 OLED display, and VL53L0X Time-of-Flight sensor over shared SDA/SCL lines.
+- **Level-Shifted UART Serial Bridge:** Bidirectional asynchronous packet communication between the Arduino Uno (5V logic) and ESP32 DevKit V1 (3.3V logic) using a voltage divider for safe logic-level translation.
+- **Physical Sensor Interfacing & Dual-Verification:** Hardware debouncing, capacitive touch sensing (TP223), mechanical limit switches, and optical distance measurements to eliminate false triggers during lid opening and dose intake.
+- **Hardware-to-Cloud Networking:** ESP32 acting as an IoT network gateway with a self-hosted captive portal (`ESPAsyncWebServer`), NTP clock synchronization, offline LittleFS flash caching, and HTTPS REST API syncing with MongoDB.
 
 ## 🎥 Demonstration Video
 [Watch the Demonstration Video](https://www.choto.cc/CSE360Demo)
